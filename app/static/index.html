@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rep Counter</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --muted:#667085; --accent:#2563eb; --err:#b42318; --line:#e4e7ec; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --card:#181b21; --fg:#e6e8eb; --muted:#98a2b3; --accent:#60a5fa; --err:#f97066; --line:#2a2f37; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:720px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:24px; margin:0 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .tabs { display:flex; gap:8px; margin-bottom:12px; }
+  .tabs button { flex:1; padding:8px; border:1px solid var(--line); background:transparent; color:var(--fg); border-radius:8px; cursor:pointer; }
+  .tabs button.active { border-color:var(--accent); color:var(--accent); font-weight:600; }
+  label { display:block; font-size:14px; color:var(--muted); margin:8px 0 4px; }
+  input, select { width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  .submit { margin-top:16px; width:100%; padding:10px; border:0; border-radius:8px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  .submit:disabled { opacity:.6; cursor:wait; }
+  .hidden { display:none; }
+  .count { font-size:64px; font-weight:700; line-height:1; }
+  .err { color:var(--err); }
+  video { width:100%; border-radius:8px; margin-top:12px; background:#000; }
+  ul { padding:0; list-style:none; margin:12px 0 0; }
+  li button { width:100%; text-align:left; padding:8px; margin-top:6px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--fg); cursor:pointer; font:inherit; }
+  .muted { color:var(--muted); font-size:14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Rep Counter</h1>
+  <form class="card" id="form">
+    <div class="tabs">
+      <button type="button" data-tab="file" class="active">Upload file</button>
+      <button type="button" data-tab="url">From URL</button>
+    </div>
+    <div data-pane="file">
+      <label for="file">Video (mp4, mov, webm)</label>
+      <input type="file" id="file" accept="video/*">
+    </div>
+    <div data-pane="url" class="hidden">
+      <label for="url">Video URL</label>
+      <input type="url" id="url" placeholder="https://…/video.mp4">
+    </div>
+    <label for="exercise">Exercise</label>
+    <select id="exercise"></select>
+    <button class="submit" id="submit" type="submit">Count reps</button>
+  </form>
+
+  <div class="card hidden" id="result">
+    <div id="error" class="err hidden"></div>
+    <div id="ok" class="hidden">
+      <div class="count" id="count"></div>
+      <div class="muted" id="summary"></div>
+      <video id="player" controls playsinline></video>
+      <ul id="reps"></ul>
+    </div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let tab = "file";
+
+document.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll("[data-tab]").forEach((x) => x.classList.toggle("active", x === b));
+  document.querySelectorAll("[data-pane]").forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== tab));
+});
+
+fetch("/api/exercises").then((r) => r.json()).then((list) => {
+  $("exercise").innerHTML = list.map((e) => `<option value="${e.name}">${e.title}</option>`).join("");
+});
+
+$("form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const fd = new FormData();
+  fd.append("exercise", $("exercise").value);
+  let src;
+  if (tab === "file") {
+    const f = $("file").files[0];
+    if (!f) return showError("Choose a video file.");
+    fd.append("file", f);
+    src = URL.createObjectURL(f);
+  } else {
+    const u = $("url").value.trim();
+    if (!u) return showError("Enter a video URL.");
+    fd.append("url", u);
+    src = u;
+  }
+  $("submit").disabled = true;
+  $("submit").textContent = "Counting…";
+  try {
+    const r = await fetch("/api/count", { method: "POST", body: fd });
+    const data = await r.json();
+    if (!r.ok) return showError(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail));
+    showResult(data, src);
+  } catch (e) {
+    showError("Request failed: " + e.message);
+  } finally {
+    $("submit").disabled = false;
+    $("submit").textContent = "Count reps";
+  }
+};
+
+function showError(msg) {
+  $("result").classList.remove("hidden");
+  $("ok").classList.add("hidden");
+  $("error").classList.remove("hidden");
+  $("error").textContent = msg;
+}
+
+function showResult(d, src) {
+  $("result").classList.remove("hidden");
+  $("error").classList.add("hidden");
+  $("ok").classList.remove("hidden");
+  $("count").textContent = d.count;
+  $("summary").textContent = `${d.exercise} reps · video ${d.duration_s}s · pose found in ${d.debug.frames_with_pose}/${d.debug.frames_sampled} frames`;
+  $("player").src = src;
+  $("reps").innerHTML = "";
+  d.reps.forEach((rep, i) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.textContent = `Rep ${i + 1}: ${rep.start_s}s → bottom ${rep.bottom_s}s → ${rep.end_s}s (min ${rep.min_angle}°)`;
+    b.onclick = () => { $("player").currentTime = rep.start_s; $("player").play(); };
+    li.appendChild(b);
+    $("reps").appendChild(li);
+  });
+}
+</script>
+</body>
+</html>

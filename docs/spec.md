@@ -1,4 +1,4 @@
-# Rep Counter — Spec (v0.2, matches the implementation)
+# Rep Counter — Spec (v0.3, matches the implementation)
 
 ## 1. Goal
 A small web app: the user uploads a video, or gives a URL to one. The backend counts the squats (later, other reps) and returns the count with a per-rep timeline.
@@ -31,6 +31,7 @@ return len(reps), reps
 Key points:
 - **3D angles.** Use MediaPipe *world* landmarks (3D, in metres), not 2D image coordinates. On the sample video the person faces the camera: in 2D the knee only reached ~125°, so a squat was never detected. In 3D it goes from ~160° standing down to ~65°. In 3D a straight leg reads ~160°, not 180°, which is why UP is 145°.
 - **Hysteresis.** Two separate thresholds keep noise around a single cut-off from creating fake reps.
+- **Stance check.** The knee angle alone cannot tell a squat from a lunge: both reach ~66–70° at the bottom. So at the bottom of each rep we also look at the **hip asymmetry** = |hip angle L − hip angle R|, where the hip angle is shoulder–hip–knee in 3D. In a squat both hips flex together (asymmetry ~5°); in a lunge the front hip flexes and the back hip stays open (~60–75°). Measured on `squat_1.mp4` and `lunge_1.mp4`. An exercise declares `stance`: `symmetric` (squat) needs asymmetry < 30°, `split` (lunge) needs ≥ 30°, `None` (push-up) skips the check. The value is the median over ±2 samples around the bottom. Both sides are always used, with no visibility filter: in a side view the far leg is hidden, and the 3D model still gives a usable estimate for it. A rep that fails the check is not counted; it goes to `rejected` with a reason, so the UI can say "1 movement looked like a lunge, not a squat".
 - *(Not implemented yet)* **Fallback signal.** If the knees are hidden, use hip height normalised by torso length.
 - *(Not implemented yet)* **Shallow squats.** Optionally calibrate the thresholds per video from the min and max of the signal: DOWN = min + 30% of range, UP = max − 20% of range.
 
@@ -54,9 +55,11 @@ FastAPI handler (synchronous, single request):
 Result:
 ```json
 { "exercise": "squat", "count": 1, "duration_s": 3.07,
-  "reps": [{"start_s": 1.13, "bottom_s": 1.47, "end_s": 2.2, "min_angle": 66.3}],
+  "reps": [{"start_s": 1.13, "bottom_s": 1.47, "end_s": 2.2, "min_angle": 66.3, "hip_asym": 4.0}],
+  "rejected": [],   // same shape as reps + "reason", e.g. "stance looks split (lunge-like), squat expected"
   "debug": {"fps_sampled": 15.0, "frames_sampled": 46, "frames_with_pose": 46,
-            "thresholds": {"down": 110, "up": 145}, "angles": [{"t": 0.0, "a": 160.9}, ...]} }
+            "thresholds": {"down": 110, "up": 145, "stance": "symmetric", "split_deg": 30},
+            "angles": [{"t": 0.0, "a": 160.9, "h": 3.1}, ...]} }
 ```
 
 ### Validation and safety
@@ -79,9 +82,9 @@ Auth, persistence in a DB, multiple people in a frame, real-time webcam.
 - **Exercises:** pluggable. Each exercise is a config entry, for example:
   ```python
   EXERCISES = {
-    "squat":  {"joints": ("hip","knee","ankle"),       "down": 110, "up": 145, "min_rep_s": 0.4},   # verified
-    "pushup": {"joints": ("shoulder","elbow","wrist"), "down": 90,  "up": 145, "min_rep_s": 0.4},   # unverified
-    "lunge":  {"joints": ("hip","knee","ankle"),       "down": 105, "up": 145, "min_rep_s": 0.5, "combine": "min"},  # unverified
+    "squat":  {"joints": ("hip","knee","ankle"),       "down": 110, "up": 145, "min_rep_s": 0.4, "stance": "symmetric"},  # verified
+    "pushup": {"joints": ("shoulder","elbow","wrist"), "down": 90,  "up": 145, "min_rep_s": 0.4},                          # unverified
+    "lunge":  {"joints": ("hip","knee","ankle"),       "down": 105, "up": 145, "min_rep_s": 0.5, "combine": "min", "stance": "split"},  # one video
   }
   ```
   The counter is generic: config → angle signal → hysteresis FSM. The frontend shows an exercise dropdown fed by `GET /api/exercises`.

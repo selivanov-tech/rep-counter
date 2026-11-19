@@ -23,6 +23,7 @@ MIN_VISIBILITY = 0.5
 class AngleSeries:
     times: list[float]
     angles: list[float]
+    hip_asym: list[float]  # |hip angle L - hip angle R|, aligned with times
     frames_sampled: int
     sample_fps: float
 
@@ -42,6 +43,7 @@ def extract_angles(video: Path, ex: Exercise, model_path: Path,
     )
     times: list[float] = []
     angles: list[float] = []
+    hip_asym: list[float] = []
     sampled = 0
     idx = 0
     try:
@@ -53,18 +55,20 @@ def extract_angles(video: Path, ex: Exercise, model_path: Path,
                 if idx % step == 0:
                     sampled += 1
                     t = idx / src_fps
-                    a = _frame_angle(landmarker, frame, int(t * 1000), ex)
-                    if a is not None:
+                    found = _frame_angles(landmarker, frame, int(t * 1000), ex)
+                    if found is not None:
                         times.append(round(t, 3))
-                        angles.append(a)
+                        angles.append(found[0])
+                        hip_asym.append(found[1])
                 idx += 1
     finally:
         cap.release()
-    return AngleSeries(times, angles, sampled, src_fps / step)
+    return AngleSeries(times, angles, hip_asym, sampled, src_fps / step)
 
 
-def _frame_angle(landmarker: PoseLandmarker, frame, ts_ms: int,
-                 ex: Exercise) -> float | None:
+def _frame_angles(landmarker: PoseLandmarker, frame, ts_ms: int,
+                  ex: Exercise) -> tuple[float, float] | None:
+    """(exercise joint angle, hip asymmetry) for one frame, or None if no pose."""
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     result = landmarker.detect_for_video(
         mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts_ms)
@@ -85,4 +89,16 @@ def _frame_angle(landmarker: PoseLandmarker, frame, ts_ms: int,
         side_angles.append(joint_angle(a, b, c))
     if not side_angles:
         return None
-    return min(side_angles) if ex.combine == "min" else sum(side_angles) / len(side_angles)
+    angle = min(side_angles) if ex.combine == "min" else sum(side_angles) / len(side_angles)
+    return angle, _hip_asymmetry(world)
+
+
+def _hip_asymmetry(world) -> float:
+    # No visibility filter on purpose: in a side view the far leg is hidden, but the
+    # 3D model still estimates it well enough to tell a split stance from a squat.
+    hip_angles = []
+    for side in LANDMARKS.values():
+        a, b, c = ((world[side[j]].x, world[side[j]].y, world[side[j]].z)
+                   for j in ("shoulder", "hip", "knee"))
+        hip_angles.append(joint_angle(a, b, c))
+    return abs(hip_angles[0] - hip_angles[1])

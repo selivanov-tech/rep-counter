@@ -6,7 +6,8 @@ from fastapi.testclient import TestClient
 from app.ingest import IngestError, check_url_safe
 from app.main import app
 
-SAMPLE = Path(__file__).parent / "data" / "squat_1.mp4"
+DATA = Path(__file__).parent / "data"
+SAMPLE = DATA / "squat_1.mp4"
 
 
 @pytest.fixture(scope="module")
@@ -31,8 +32,38 @@ def test_sample_video_counts_one_squat(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["count"] == 1
+    assert body["rejected"] == []
     rep = body["reps"][0]
     assert rep["start_s"] < rep["bottom_s"] < rep["end_s"]
+
+
+# Side view, alternating legs, looped clip: it starts and ends at the bottom of a
+# cut rep, with one full lunge in between (~2.3-4.3 s).
+def test_lunge_video_counts_one_full_rep(client):
+    with (DATA / "lunge_1.mp4").open("rb") as f:
+        r = client.post("/api/count", data={"exercise": "lunge"},
+                        files={"file": ("lunge.mp4", f, "video/mp4")})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1
+    rep = body["reps"][0]
+    assert 2.0 < rep["start_s"] < rep["bottom_s"] < rep["end_s"] < 4.6
+
+
+# The knee angle is the same in both exercises; the stance check must reject the
+# wrong one instead of counting it.
+@pytest.mark.parametrize("video, exercise", [
+    ("squat_1.mp4", "lunge"), ("lunge_1.mp4", "squat"),
+])
+def test_wrong_exercise_is_not_counted(client, video, exercise):
+    with (DATA / video).open("rb") as f:
+        r = client.post("/api/count", data={"exercise": exercise},
+                        files={"file": (video, f, "video/mp4")})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 0
+    assert len(body["rejected"]) == 1
+    assert exercise in body["rejected"][0]["reason"]
 
 
 def test_needs_exactly_one_input(client):

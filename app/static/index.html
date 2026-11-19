@@ -56,6 +56,7 @@
       <div class="muted" id="summary"></div>
       <video id="player" controls playsinline></video>
       <ul id="reps"></ul>
+      <div class="muted hidden" id="rejected"></div>
     </div>
   </div>
 </main>
@@ -127,6 +128,11 @@ function showResult(d, src) {
     li.appendChild(b);
     $("reps").appendChild(li);
   });
+  const rej = d.rejected || [];
+  $("rejected").classList.toggle("hidden", rej.length === 0);
+  $("rejected").textContent = rej.length
+    ? `Not counted: ${rej.length} movement(s) — ` + rej.map((r) => `${r.start_s}s: ${r.reason}`).join("; ")
+    : "";
 }
 </script>
 </body>

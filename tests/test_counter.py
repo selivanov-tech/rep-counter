@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from app.counter import count_reps, joint_angle, median_smooth
+from app.counter import Rep, check_stance, count_reps, joint_angle, median_smooth
 from app.exercises import EXERCISES
 
 SQUAT = EXERCISES["squat"]
@@ -59,3 +59,32 @@ def test_too_fast_rep_filtered():
 
 def test_median_smooth_keeps_length():
     assert len(median_smooth([1, 2, 3, 100, 5, 6], 5)) == 6
+
+
+def _one_rep_with_asym(asym_at_bottom):
+    times = [i / 10 for i in range(30)]
+    asym = [5.0] * 30
+    asym[13:18] = [asym_at_bottom] * 5
+    return [Rep(1.0, 1.5, 2.0, 70.0)], times, asym
+
+
+@pytest.mark.parametrize("exercise, asym, counted", [
+    ("squat", 5.0, True),     # symmetric hips: a real squat
+    ("squat", 65.0, False),   # split hips: a lunge, not a squat
+    ("lunge", 65.0, True),
+    ("lunge", 5.0, False),
+    ("pushup", 65.0, True),   # no stance check for push-ups
+])
+def test_check_stance(exercise, asym, counted):
+    reps, times, hip_asym = _one_rep_with_asym(asym)
+    ok, rejected = check_stance(reps, times, hip_asym, EXERCISES[exercise])
+    assert (len(ok), len(rejected)) == ((1, 0) if counted else (0, 1))
+    rep = (ok or [r.rep for r in rejected])[0]
+    assert rep.hip_asym == asym
+
+
+def test_check_stance_uses_median_around_bottom():
+    reps, times, hip_asym = _one_rep_with_asym(5.0)
+    hip_asym[15] = 90.0  # one noisy frame at the bottom must not flip the result
+    ok, rejected = check_stance(reps, times, hip_asym, SQUAT)
+    assert len(ok) == 1 and not rejected
